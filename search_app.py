@@ -83,14 +83,24 @@ def search():
 
     filters = _build_filter(min_rating, language)
 
+    # Fetch more than requested so deduplication doesn't leave us short
+    fetch_k = top_k * 3
+
     try:
         vs = get_vectorstore()
-        raw = vs.similarity_search_with_score(query, k=top_k, filter=filters)
+        raw = vs.similarity_search_with_score(query, k=fetch_k, filter=filters)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
     results = []
+    seen = set()  # normalised message text already added
     for doc, score in raw:
+        # Normalise: lowercase + collapse whitespace for duplicate detection
+        normalised = " ".join(doc.page_content.lower().split())
+        if normalised in seen:
+            continue
+        seen.add(normalised)
+
         m = doc.metadata
         results.append({
             "message": doc.page_content,
@@ -101,6 +111,8 @@ def search():
             "thumbs_up": m.get("thumbs_up_count", 0),
             "similarity": round(float(score), 4),
         })
+        if len(results) >= top_k:
+            break
 
     return jsonify({"results": results, "count": len(results), "query": query})
 
