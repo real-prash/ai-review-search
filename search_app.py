@@ -23,9 +23,6 @@ QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "ai_reviews")
 DEFAULT_TOP_K = 10
-# Cosine distance threshold: results with score above this are too dissimilar.
-# Lower = stricter (0.35 ≈ 65%+ match, 0.45 ≈ 55%+ match).
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.40"))
 # Maximum unique results returned per query (frontend paginates within this pool).
 MAX_RESULTS = 50
 
@@ -95,10 +92,6 @@ def search():
     results = []
     seen = set()
     for doc, score in raw:
-        # Drop results that are too dissimilar
-        if score > SIMILARITY_THRESHOLD:
-            continue
-
         # Deduplicate by normalised message text
         normalised = " ".join(doc.page_content.lower().split())
         if normalised in seen:
