@@ -84,10 +84,12 @@ qdrant_store = QdrantVectorStore(
 # ---------------------------------------------------------------------------
 print(f"Migrating {total_docs:,} documents in batches of {BATCH_SIZE}...")
 
-offset = None
-migrated = 0
+from langchain_core.documents import Document
 
-while True:
+migrated = 0
+offset = 0  # Chroma uses integer offsets
+
+while offset < total_docs:
     result = chroma._collection.get(
         limit=BATCH_SIZE,
         offset=offset,
@@ -97,7 +99,6 @@ while True:
     if not ids:
         break
 
-    from langchain_core.documents import Document
     docs = [
         Document(page_content=doc, metadata=meta)
         for doc, meta in zip(result["documents"], result["metadatas"])
@@ -105,11 +106,8 @@ while True:
 
     qdrant_store.add_documents(docs)
     migrated += len(docs)
+    offset += len(docs)
     print(f"  Migrated {migrated:,} / {total_docs:,}...")
-
-    if len(ids) < BATCH_SIZE:
-        break
-    offset = ids[-1]
 
 print(f"\nDone. {migrated:,} documents in Qdrant Cloud collection '{QDRANT_COLLECTION}'.")
 print("You can now deploy search_app.py with QDRANT_URL and QDRANT_API_KEY set.")
