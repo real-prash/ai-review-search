@@ -189,6 +189,19 @@
     }
     #no-results p { margin-top: 0.5rem; font-size: 0.85rem; }
 
+    #load-more-wrap { text-align: center; margin-top: 1rem; display: none; }
+    #load-more-btn {
+      padding: 0.6rem 1.6rem;
+      background: #fff;
+      border: 1.5px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      color: #374151;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    #load-more-btn:hover { border-color: #4f46e5; background: #eef2ff; color: #4f46e5; }
+
     /* ── Spinner ── */
     .spinner {
       width: 16px; height: 16px;
@@ -252,6 +265,9 @@
 <div class="results-section">
   <div id="status"></div>
   <div id="results"></div>
+  <div id="load-more-wrap">
+    <button id="load-more-btn" onclick="loadMore()">Load more</button>
+  </div>
   <div id="no-results">
     <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -263,27 +279,54 @@
 </div>
 
 <script>
-  const $  = id => document.getElementById(id);
+  const $   = id => document.getElementById(id);
   const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
                     .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 
+  const PAGE_SIZE = 15;
+  let allResults  = [];   // full pool returned by server
+  let shown       = 0;    // how many cards are currently rendered
+
   $('query-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 
-  function runSample(el) {
-    $('query-input').value = el.textContent;
-    doSearch();
-  }
+  function runSample(el) { $('query-input').value = el.textContent; doSearch(); }
 
   function starsHtml(n) {
     n = Math.max(0, Math.min(5, parseInt(n) || 0));
     return `<span class="stars-filled">${'★'.repeat(n)}</span>`
-         + `<span class="stars-empty">${'★'.repeat(5 - n)}</span>`;
+         + `<span class="stars-empty">${'★'.repeat(5-n)}</span>`;
   }
 
   function matchPct(score) {
-    // Qdrant returns cosine distance (lower = more similar); convert to %
     return Math.round((1 - Math.min(score, 1)) * 100);
   }
+
+  function cardHtml(r, i) {
+    const thumbs = r.thumbs_up > 0 ? `<span class="badge badge-thumb">👍 ${r.thumbs_up}</span>` : '';
+    return `
+      <div class="result-card">
+        <div class="card-meta">
+          <span class="badge badge-match">${matchPct(r.similarity)}% match</span>
+          <span class="badge badge-star">${starsHtml(r.score)} ${r.score}/5</span>
+          ${r.timestamp ? `<span class="badge badge-date">${r.timestamp}</span>` : ''}
+          ${thumbs}
+        </div>
+        <p class="card-text clamped" id="ct${i}">${esc(r.message)}</p>
+        <button class="expand-btn" onclick="toggle(${i},this)">Show more</button>
+      </div>`;
+  }
+
+  function renderMore() {
+    const next = allResults.slice(shown, shown + PAGE_SIZE);
+    $('results').insertAdjacentHTML('beforeend', next.map((r, j) => cardHtml(r, shown + j)).join(''));
+    shown += next.length;
+    const wrap = $('load-more-wrap');
+    wrap.style.display = shown < allResults.length ? 'block' : 'none';
+    $('status').textContent =
+      `Showing ${shown} of ${allResults.length} result${allResults.length !== 1 ? 's' : ''} for "${esc($('query-input').value.trim())}"`;
+  }
+
+  function loadMore() { renderMore(); }
 
   function doSearch() {
     const q = $('query-input').value.trim();
@@ -294,9 +337,12 @@
     btn.innerHTML = '<div class="spinner"></div> Searching…';
     $('status').textContent = '';
     $('results').innerHTML = '';
+    $('load-more-wrap').style.display = 'none';
     $('no-results').style.display = 'none';
+    allResults = [];
+    shown = 0;
 
-    fetch('/search?' + new URLSearchParams({ q, top_k: 15 }))
+    fetch('/search?' + new URLSearchParams({ q }))
       .then(r => r.json())
       .then(data => {
         btn.disabled = false;
@@ -305,28 +351,10 @@
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Search`;
 
         if (data.error) { $('status').textContent = 'Error: ' + data.error; return; }
+        if (!data.results.length) { $('no-results').style.display = 'block'; return; }
 
-        const { results, count } = data;
-        if (!count) { $('no-results').style.display = 'block'; return; }
-
-        $('status').textContent = `${count} result${count !== 1 ? 's' : ''} for "${esc(data.query)}"`;
-
-        $('results').innerHTML = results.map((r, i) => {
-          const pct = matchPct(r.similarity);
-          const thumbs = r.thumbs_up > 0
-            ? `<span class="badge badge-thumb">👍 ${r.thumbs_up}</span>` : '';
-          return `
-            <div class="result-card">
-              <div class="card-meta">
-                <span class="badge badge-match">${pct}% match</span>
-                <span class="badge badge-star">${starsHtml(r.score)} ${r.score}/5</span>
-                ${r.timestamp ? `<span class="badge badge-date">${r.timestamp}</span>` : ''}
-                ${thumbs}
-              </div>
-              <p class="card-text clamped" id="ct${i}">${esc(r.message)}</p>
-              <button class="expand-btn" onclick="toggle(${i},this)">Show more</button>
-            </div>`;
-        }).join('');
+        allResults = data.results;
+        renderMore();
       })
       .catch(err => {
         btn.disabled = false;
@@ -336,8 +364,7 @@
   }
 
   function toggle(i, btn) {
-    const el = $('ct' + i);
-    const clamped = el.classList.toggle('clamped');
+    const clamped = $('ct'+i).classList.toggle('clamped');
     btn.textContent = clamped ? 'Show more' : 'Show less';
   }
 </script>

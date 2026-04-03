@@ -1,90 +1,164 @@
 # AI Review Search
 
-A semantic search tool for querying ~81,000 AI-related app reviews. Built for internal stakeholders (support, product managers, analysts) to explore user sentiment around AI features.
+A semantic search tool that lets internal stakeholders (support, product managers, analysts) query ~81,000 AI-related app reviews using natural language. Built on LangGraph, Qdrant Cloud, and Flask, deployed on Railway.
 
-## How It Works
+---
 
-### 1. Data Ingestion (`pipeline.py`)
+## End-to-End Architecture
 
-A memory-safe batch pipeline processes `reviews_dataset.csv.gz` (~3.3 million rows) without loading the entire file into memory.
+```
+reviews_dataset.csv.gz  (3.3M rows)
+          │
+          ▼
+┌─────────────────────────────┐
+│  1. Batch Ingestion         │  pipeline.py
+│     ThreadPoolExecutor      │
+│     Mock sentiment agents   │
+└────────────┬────────────────┘
+             │ sentiment_results.jsonl.gz
+             ▼
+┌─────────────────────────────┐
+│  2. AI Review Pipeline      │  trials.ipynb
+│     LangGraph (3-node DAG)  │
+│     Keyword filter          │
+│     Embed → Chroma (local)  │
+└────────────┬────────────────┘
+             │ chroma_reviews_db/ (297 MB, 80,992 docs)
+             ▼
+┌─────────────────────────────┐
+│  3. Migration               │  migrate_to_qdrant.py
+│     Chroma → Qdrant Cloud   │
+└────────────┬────────────────┘
+             │ Qdrant Cloud collection: ai_reviews
+             ▼
+┌─────────────────────────────┐
+│  4. Search App              │  search_app.py
+│     Flask + FastEmbed       │
+│     Similarity threshold    │
+│     Deduplication           │
+└────────────┬────────────────┘
+             │
+             ▼
+      Railway (public URL)
+      templates/index.html
+```
 
-- Reads the gzipped CSV in streaming batches using `gzip` + `csv.DictReader`
-- Dispatches batches to a `ThreadPoolExecutor` (MapReduce pattern)
-- Each worker runs a sentiment analysis function (mock → replace with real LLM)
-- Results are written incrementally to `sentiment_results.jsonl.gz` as batches complete
+---
 
-### 2. AI Review Classification + Vector DB (`trials.ipynb`)
+## Phase 1 — Batch Ingestion (`pipeline.py`)
 
-A LangGraph pipeline identifies reviews that mention AI features and stores them for semantic search.
+Processes `reviews_dataset.csv.gz` (3.3M rows) without loading the full file into memory.
 
-**Graph architecture:**
+- **Reader**: `batch_reader()` — streams gzipped CSV using `gzip.open` + `csv.DictReader`, yields batches of 5,000 rows
+- **Orchestrator**: `ThreadPoolExecutor` (MapReduce pattern) — submits each batch as a concurrent task. Thread-based because real LLM calls are I/O-bound
+- **Worker**: `mock_ai_sentiment_agent()` — placeholder for an LLM sentiment classifier; returns sentiment + confidence per review
+- **Sink**: results written incrementally to `sentiment_results.jsonl.gz` as each batch completes (`as_completed`), so no progress is lost on interruption
+
+---
+
+## Phase 2 — AI Review Classification + Embeddings (`trials.ipynb`)
+
+A **LangGraph pipeline** identifies reviews mentioning AI features and stores them as vectors for semantic search.
+
+### Graph
+
 ```
 START → stream_and_filter → embed_and_store → summarize_run → END
 ```
 
-- **`stream_and_filter`** — Streams the CSV in chunks of 5,000 rows using `pandas`. Applies a regex keyword filter (25 AI-related terms: `ai`, `llm`, `chatbot`, `gpt`, `autocomplete`, etc.) with zero API calls. Yields ~81,000 matching reviews from 3.3M (~2.5%).
+### Node 1: `stream_and_filter`
 
-- **`embed_and_store`** — Embeds matching reviews with `sentence-transformers/all-MiniLM-L6-v2` (384-dimensional vectors, runs locally on CPU). Stores them in a local **Chroma** vector database (`chroma_reviews_db/`) with full metadata: rating, timestamp, language, app version, thumbs-up count.
+- Streams CSV in chunks of 5,000 rows via `pandas.read_csv(..., chunksize=5000, compression='gzip')`
+- Applies a compiled regex (`AI_KEYWORDS`) against the `message` field — 25 terms including: `ai`, `llm`, `chatbot`, `gpt`, `gemini`, `copilot`, `neural network`, `voice assistant`, `natural language`, `deep learning`
+- Zero API calls — pure Python, processes 3.3M rows in ~3 minutes
+- **Yield**: ~81,000 matching reviews (~2.5% of dataset)
 
-- **`summarize_run`** — Prints a run summary (rows scanned, AI reviews found, DB size).
+### Node 2: `embed_and_store`
 
-**Models used:**
-- Planner: `llama-3.3-70b-versatile` via Groq (structured outputs, report synthesis)
-- Worker: `meta-llama/llama-4-scout-17b-16e-instruct` via Groq (with `.with_retry()` for rate limit handling)
+- Initialises `HuggingFaceEmbeddings(model="sentence-transformers/all-MiniLM-L6-v2")` — 384-dimensional vectors, runs on CPU
+- Converts each review to a `Document` with full metadata: `key`, `score` (star rating), `timestamp`, `language`, `app_version`, `thumbs_up_count`
+- Stores in **Chroma** (local SQLite-backed vector DB) in sub-batches of 5,000 using `Chroma.from_documents()` then `.add_documents()`
+- Output: `chroma_reviews_db/` (~297 MB on disk)
 
-### 3. Search App (`search_app.py`)
+### Node 3: `summarize_run`
 
-A Flask web app that lets stakeholders query the reviews via natural language.
+- Prints total rows scanned, AI reviews found, percentage yield, DB document count
 
-- Query is embedded using **FastEmbed** (`all-MiniLM-L6-v2`, ONNX-based — no PyTorch)
-- Similarity search runs against **Qdrant Cloud** (81,000 vectors)
-- Optional filters: minimum star rating, language
-- Returns top-K results with similarity score, rating, language, and date
+### LLMs configured (for future LLM-classification upgrade)
 
-### 4. Deployment
+| Role | Model | Via |
+|------|-------|-----|
+| Planner | `llama-3.3-70b-versatile` | Groq |
+| Worker | `meta-llama/llama-4-scout-17b-16e-instruct` | Groq |
 
-- **Vector DB**: Qdrant Cloud (free tier) — migrated from local Chroma via `migrate_to_qdrant.py`
-- **Web app**: Deployed on Railway (auto-deploys from GitHub on push)
-- **Embeddings at query time**: FastEmbed (ONNX runtime, ~50MB vs ~1.5GB for PyTorch)
+Worker has `.with_retry(stop_after_attempt=8, wait_exponential_jitter=True)` to handle Groq rate limits automatically.
 
 ---
 
-## Stack
+## Phase 3 — Migration to Qdrant Cloud (`migrate_to_qdrant.py`)
 
-| Layer | Technology |
-|-------|-----------|
-| Orchestration | LangGraph |
-| LLMs | Groq (Llama 3.3 70B + Llama 4 Scout 17B) |
-| Batch ingestion | Python `gzip`, `csv`, `ThreadPoolExecutor` |
-| Keyword filter | Python `re` (compiled regex) |
-| Embeddings (ingestion) | `sentence-transformers/all-MiniLM-L6-v2` |
-| Embeddings (query) | FastEmbed (ONNX) |
-| Local vector DB | Chroma (SQLite-backed) |
-| Cloud vector DB | Qdrant Cloud |
-| Web framework | Flask + Gunicorn |
-| Deployment | Railway |
+One-time script that copies all documents from local Chroma to Qdrant Cloud.
+
+- Reads local Chroma in integer-offset pages of 500 documents
+- Creates the `ai_reviews` collection in Qdrant (384-dim, cosine distance)
+- Uploads via `QdrantVectorStore.add_documents()` in batches
+- **Result**: 80,992 documents in Qdrant Cloud — the production vector store
+
+---
+
+## Phase 4 — Search App (`search_app.py`)
+
+Flask app that serves the stakeholder UI and handles search queries.
+
+### Startup (lazy)
+
+The embedding model and Qdrant connection are initialised on the **first search request**, not at module load. This lets Railway's healthcheck pass instantly on `GET /`.
+
+### Search logic (`GET /search?q=...`)
+
+1. Fetch `MAX_RESULTS × 4` (200) candidates from Qdrant via `similarity_search_with_score`
+2. **Similarity filter**: drop results with cosine distance > `SIMILARITY_THRESHOLD` (default `0.40` — roughly 60%+ semantic match). Controlled via `SIMILARITY_THRESHOLD` env var
+3. **Deduplication**: normalise each message (lowercase + collapsed whitespace), skip exact duplicates
+4. Return up to `MAX_RESULTS` (50) unique, relevant results as JSON
+
+### Embeddings at query time
+
+Uses **FastEmbed** (`fastembed` + `langchain_community.embeddings.FastEmbedEmbeddings`) with the same `all-MiniLM-L6-v2` model used during ingestion. FastEmbed uses ONNX runtime instead of PyTorch — reduces the Docker image from ~2 GB to ~300 MB.
+
+---
+
+## Phase 5 — Frontend (`templates/index.html`)
+
+Single-page vanilla JS app.
+
+- **Search bar** centered on page, Enter key supported
+- **Sample query chips**: 8 curated queries based on real review patterns — click to run instantly
+- **Client-side pagination**: server returns up to 50 results; frontend shows 15 at a time with a **Load more** button (no extra API calls)
+- **Result cards**: show match %, star rating, date, thumbs-up count; long reviews are clamped to 3 lines with a Show more toggle
+- Fully responsive / mobile-friendly
 
 ---
 
 ## Running Locally
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+# Install deps
+pip install flask gunicorn fastembed langchain-core langchain-community \
+            langchain-qdrant qdrant-client python-dotenv
 
-# 2. Run the ingestion pipeline (notebook)
-jupyter notebook trials.ipynb
-# Execute cells 1–6 in order
+# Run ingestion pipeline (Jupyter)
+jupyter notebook trials.ipynb    # run cells 1–6
 
-# 3. Start the search app (uses local Chroma DB)
+# Start search app against local Chroma (no Qdrant needed)
+# Add langchain-chroma and chromadb to the install above, then:
 python search_app.py
-# Open http://localhost:5000
+# → http://localhost:5000
 ```
 
 ## Deploying to Production
 
 ```bash
-# 1. Migrate local Chroma → Qdrant Cloud (run once after ingestion)
+# 1. Migrate local Chroma → Qdrant Cloud (run once)
 QDRANT_URL=https://your-cluster.qdrant.io \
 QDRANT_API_KEY=your-key \
 python migrate_to_qdrant.py
@@ -92,17 +166,29 @@ python migrate_to_qdrant.py
 # 2. Push to GitHub
 git push origin main
 
-# 3. On Railway: add environment variables
-#    QDRANT_URL  = https://your-cluster.qdrant.io
-#    QDRANT_API_KEY = your-key
+# 3. Connect repo to Railway, set env vars (see below)
 ```
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `QDRANT_URL` | Production | — | Qdrant Cloud cluster URL |
-| `QDRANT_API_KEY` | Production | — | Qdrant Cloud API key |
+| `QDRANT_URL` | Yes (prod) | — | Qdrant Cloud cluster URL |
+| `QDRANT_API_KEY` | Yes (prod) | — | Qdrant Cloud API key |
 | `QDRANT_COLLECTION` | No | `ai_reviews` | Collection name |
 | `EMBEDDING_MODEL` | No | `sentence-transformers/all-MiniLM-L6-v2` | FastEmbed model |
-| `PORT` | No | `5000` | Web server port |
+| `SIMILARITY_THRESHOLD` | No | `0.40` | Max cosine distance (lower = stricter) |
+| `PORT` | No | `5000` | Web server port (set automatically by Railway) |
+
+## File Reference
+
+| File | Purpose |
+|------|---------|
+| `pipeline.py` | Batch ingestion — streams CSV, mock sentiment agents, JSONL sink |
+| `trials.ipynb` | LangGraph pipeline — keyword filter, embed, store in Chroma |
+| `migrate_to_qdrant.py` | One-time migration from local Chroma to Qdrant Cloud |
+| `search_app.py` | Flask search backend — similarity filter, dedup, pagination |
+| `templates/index.html` | Stakeholder search UI |
+| `build.sh` | Pre-downloads embedding model at Railway build time |
+| `Procfile` | Gunicorn start command for Railway/Render |
+| `railway.json` | Railway deployment config |

@@ -23,6 +23,11 @@ QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "ai_reviews")
 DEFAULT_TOP_K = 10
+# Cosine distance threshold: results with score above this are too dissimilar.
+# Lower = stricter (0.35 ≈ 65%+ match, 0.45 ≈ 55%+ match).
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.40"))
+# Maximum unique results returned per query (frontend paginates within this pool).
+MAX_RESULTS = 50
 
 app = Flask(__name__)
 
@@ -74,28 +79,27 @@ def index():
 @app.route("/search")
 def search():
     query = request.args.get("q", "").strip()
-    top_k = int(request.args.get("top_k", DEFAULT_TOP_K))
-    min_rating = request.args.get("min_rating", "")
-    language = request.args.get("language", "").strip().lower()
 
     if not query:
         return jsonify({"results": [], "count": 0, "query": query})
 
-    filters = _build_filter(min_rating, language)
-
-    # Fetch more than requested so deduplication doesn't leave us short
-    fetch_k = top_k * 3
+    # Fetch a large pool so dedup + threshold filtering still leaves plenty
+    fetch_k = MAX_RESULTS * 4
 
     try:
         vs = get_vectorstore()
-        raw = vs.similarity_search_with_score(query, k=fetch_k, filter=filters)
+        raw = vs.similarity_search_with_score(query, k=fetch_k)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
     results = []
-    seen = set()  # normalised message text already added
+    seen = set()
     for doc, score in raw:
-        # Normalise: lowercase + collapse whitespace for duplicate detection
+        # Drop results that are too dissimilar
+        if score > SIMILARITY_THRESHOLD:
+            continue
+
+        # Deduplicate by normalised message text
         normalised = " ".join(doc.page_content.lower().split())
         if normalised in seen:
             continue
@@ -111,7 +115,7 @@ def search():
             "thumbs_up": m.get("thumbs_up_count", 0),
             "similarity": round(float(score), 4),
         })
-        if len(results) >= top_k:
+        if len(results) >= MAX_RESULTS:
             break
 
     return jsonify({"results": results, "count": len(results), "query": query})
