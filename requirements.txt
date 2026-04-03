@@ -1,12 +1,8 @@
 flask
 gunicorn
 python-dotenv
-pandas
-tqdm
-chromadb
-sentence-transformers
+fastembed
 langchain-core
-langchain-chroma
-langchain-huggingface
+langchain-community
 langchain-qdrant
 qdrant-client

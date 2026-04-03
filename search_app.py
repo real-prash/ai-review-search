@@ -4,10 +4,12 @@ AI Review Search — Flask app.
 Vector DB backend is selected by environment variables:
   - Default (local dev): uses Chroma at CHROMA_PERSIST_DIR (./chroma_reviews_db)
   - Production:          set QDRANT_URL + QDRANT_API_KEY to use Qdrant Cloud
+
+Embedding: fastembed (ONNX-based, no PyTorch — keeps the Docker image small).
 """
 import os
 from flask import Flask, render_template, request, jsonify
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -26,10 +28,7 @@ DEFAULT_TOP_K = 10
 app = Flask(__name__)
 
 print("Loading embedding model...")
-embeddings = HuggingFaceEmbeddings(
-    model_name=EMBEDDING_MODEL,
-    model_kwargs={"device": "cpu"},
-)
+embeddings = FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
 
 if QDRANT_URL:
     from langchain_qdrant import QdrantVectorStore
