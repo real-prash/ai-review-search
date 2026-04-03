@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Review Search</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f7fa;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 1.5rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 600; }
+    header span { font-size: 0.85rem; color: #8b8fa8; margin-left: auto; }
+
+    .search-section {
+      background: #fff;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 1.5rem 2rem;
+    }
+
+    .search-row {
+      display: flex;
+      gap: 0.75rem;
+      max-width: 900px;
+      flex-wrap: wrap;
+    }
+
+    #query-input {
+      flex: 1;
+      min-width: 260px;
+      padding: 0.65rem 1rem;
+      border: 1.5px solid #cbd5e0;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #query-input:focus { border-color: #4f46e5; }
+
+    select {
+      padding: 0.65rem 0.75rem;
+      border: 1.5px solid #cbd5e0;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      background: #fff;
+      cursor: pointer;
+      outline: none;
+    }
+    select:focus { border-color: #4f46e5; }
+
+    #search-btn {
+      padding: 0.65rem 1.5rem;
+      background: #4f46e5;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #search-btn:hover { background: #4338ca; }
+    #search-btn:disabled { background: #a5b4fc; cursor: not-allowed; }
+
+    .main { padding: 1.5rem 2rem; max-width: 900px; }
+
+    #status {
+      font-size: 0.85rem;
+      color: #64748b;
+      margin-bottom: 1rem;
+      min-height: 1.2em;
+    }
+
+    .result-card {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 0.75rem;
+      transition: box-shadow 0.15s;
+    }
+    .result-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.07); }
+
+    .card-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.6rem;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+    .badge-sim  { background: #ede9fe; color: #5b21b6; }
+    .badge-star { background: #fef9c3; color: #854d0e; }
+    .badge-lang { background: #dbeafe; color: #1e40af; }
+    .badge-date { background: #f1f5f9; color: #475569; }
+    .badge-thumb { background: #dcfce7; color: #166534; }
+
+    .star { color: #f59e0b; }
+
+    .card-text {
+      font-size: 0.92rem;
+      line-height: 1.55;
+      color: #374151;
+    }
+
+    .card-text.truncated {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .expand-btn {
+      background: none;
+      border: none;
+      color: #4f46e5;
+      font-size: 0.8rem;
+      cursor: pointer;
+      padding: 0.25rem 0;
+      display: block;
+      margin-top: 0.3rem;
+    }
+
+    #no-results {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: #64748b;
+      display: none;
+    }
+    #no-results svg { margin: 0 auto 1rem; display: block; }
+
+    .spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid #fff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 0.4rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+  </svg>
+  <h1>AI Review Search</h1>
+  <span>Search user reviews mentioning AI features</span>
+</header>
+
+<div class="search-section">
+  <form class="search-row" id="search-form" onsubmit="return false">
+    <input id="query-input" type="text" placeholder="e.g. autocomplete suggestions wrong, AI reply helpful…" autocomplete="off" />
+
+    <select id="min-rating">
+      <option value="">All ratings</option>
+      <option value="5">⭐⭐⭐⭐⭐ 5 stars</option>
+      <option value="4">⭐⭐⭐⭐+ 4 stars</option>
+      <option value="3">⭐⭐⭐+ 3 stars</option>
+      <option value="1">⭐ 1–2 stars (negative)</option>
+    </select>
+
+    <select id="language">
+      <option value="">All languages</option>
+      <option value="en">English</option>
+      <option value="de">German</option>
+      <option value="fr">French</option>
+      <option value="es">Spanish</option>
+      <option value="pt">Portuguese</option>
+      <option value="it">Italian</option>
+      <option value="nl">Dutch</option>
+      <option value="pl">Polish</option>
+    </select>
+
+    <select id="top-k">
+      <option value="10">10 results</option>
+      <option value="20">20 results</option>
+      <option value="50">50 results</option>
+    </select>
+
+    <button type="submit" id="search-btn" onclick="doSearch()">Search</button>
+  </form>
+</div>
+
+<div class="main">
+  <div id="status"></div>
+  <div id="results"></div>
+  <div id="no-results">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#cbd5e0"
+         stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <p>No reviews matched your query.</p>
+    <p style="font-size:0.8rem;margin-top:0.4rem">Try different keywords or remove filters.</p>
+  </div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+
+  // Allow pressing Enter to search
+  $('query-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doSearch();
+  });
+
+  function stars(n) {
+    n = parseInt(n) || 0;
+    return '★'.repeat(n) + '☆'.repeat(5 - n);
+  }
+
+  function doSearch() {
+    const q = $('query-input').value.trim();
+    if (!q) return;
+
+    const params = new URLSearchParams({
+      q,
+      top_k: $('top-k').value,
+      min_rating: $('min-rating').value,
+      language: $('language').value,
+    });
+
+    const btn = $('search-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Searching…';
+    $('status').textContent = '';
+    $('results').innerHTML = '';
+    $('no-results').style.display = 'none';
+
+    fetch('/search?' + params)
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        btn.textContent = 'Search';
+
+        if (data.error) {
+          $('status').textContent = 'Error: ' + data.error;
+          return;
+        }
+
+        const { results, count } = data;
+        $('status').textContent = count
+          ? `${count} result${count !== 1 ? 's' : ''} for "${data.query}"`
+          : '';
+
+        if (!count) {
+          $('no-results').style.display = 'block';
+          return;
+        }
+
+        $('results').innerHTML = results.map((r, i) => `
+          <div class="result-card">
+            <div class="card-meta">
+              <span class="badge badge-sim">
+                ${(1 - r.similarity).toFixed ? (1 - r.similarity * r.similarity).toFixed(0) : ''}
+                Match ${Math.round((1 - Math.min(r.similarity, 2) / 2) * 100)}%
+              </span>
+              <span class="badge badge-star">
+                <span class="star">${stars(r.score)}</span>&nbsp;${r.score}/5
+              </span>
+              ${r.language ? `<span class="badge badge-lang">${r.language.toUpperCase()}</span>` : ''}
+              ${r.timestamp ? `<span class="badge badge-date">${r.timestamp}</span>` : ''}
+              ${r.thumbs_up > 0 ? `<span class="badge badge-thumb">👍 ${r.thumbs_up}</span>` : ''}
+            </div>
+            <p class="card-text truncated" id="text-${i}">${escHtml(r.message)}</p>
+            <button class="expand-btn" onclick="toggleExpand(${i}, this)">Show more</button>
+          </div>
+        `).join('');
+      })
+      .catch(err => {
+        btn.disabled = false;
+        btn.textContent = 'Search';
+        $('status').textContent = 'Request failed: ' + err.message;
+      });
+  }
+
+  function toggleExpand(i, btn) {
+    const el = document.getElementById('text-' + i);
+    if (el.classList.contains('truncated')) {
+      el.classList.remove('truncated');
+      btn.textContent = 'Show less';
+    } else {
+      el.classList.add('truncated');
+      btn.textContent = 'Show more';
+    }
+  }
+
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+              .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+  }
+</script>
+
+</body>
+</html>

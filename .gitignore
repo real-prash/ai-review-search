@@ -1,0 +1,26 @@
+# Large data files — never commit these
+reviews_dataset.csv.gz
+sentiment_results.jsonl.gz
+first_batch.csv
+
+# Local vector DB — replaced by Qdrant Cloud in production
+chroma_reviews_db/
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

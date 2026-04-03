@@ -1,0 +1,12 @@
+flask
+gunicorn
+python-dotenv
+pandas
+tqdm
+chromadb
+sentence-transformers
+langchain-core
+langchain-chroma
+langchain-huggingface
+langchain-qdrant
+qdrant-client
