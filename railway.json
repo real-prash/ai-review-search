@@ -1,7 +1,8 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "NIXPACKS",
+    "buildCommand": "pip install -r requirements.txt && bash build.sh"
   },
   "deploy": {
     "startCommand": "gunicorn search_app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120",
