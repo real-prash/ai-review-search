@@ -41,28 +41,23 @@ def get_vectorstore():
     print("Loading embedding model...")
     embeddings = FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
 
-    if QDRANT_URL:
-        from langchain_qdrant import QdrantVectorStore
-        from qdrant_client import QdrantClient
-
-        print(f"Connecting to Qdrant Cloud at {QDRANT_URL} ...")
-        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        _vectorstore = QdrantVectorStore(
-            client=client,
-            collection_name=QDRANT_COLLECTION,
-            embedding=embeddings,
+    if not QDRANT_URL:
+        raise RuntimeError(
+            "QDRANT_URL environment variable is not set. "
+            "Add it in your Railway dashboard under Variables."
         )
-        print("Vector store ready (qdrant).")
-    else:
-        from langchain_chroma import Chroma
 
-        print(f"Loading local Chroma DB from {CHROMA_PERSIST_DIR!r} ...")
-        _vectorstore = Chroma(
-            persist_directory=CHROMA_PERSIST_DIR,
-            collection_name=CHROMA_COLLECTION,
-            embedding_function=embeddings,
-        )
-        print("Vector store ready (chroma).")
+    from langchain_qdrant import QdrantVectorStore
+    from qdrant_client import QdrantClient
+
+    print(f"Connecting to Qdrant Cloud at {QDRANT_URL} ...")
+    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+    _vectorstore = QdrantVectorStore(
+        client=client,
+        collection_name=QDRANT_COLLECTION,
+        embedding=embeddings,
+    )
+    print("Vector store ready (qdrant).")
 
     return _vectorstore
 
